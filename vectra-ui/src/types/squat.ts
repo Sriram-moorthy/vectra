@@ -104,6 +104,25 @@ export type SquatApiResponse = {
   squat_analysis: SquatAnalysis;
 };
 
+export type SquatJobStatus = "queued" | "running" | "completed" | "failed";
+
+export type SquatJobResponse = {
+  id: string;
+  analysis_type: string;
+  status: SquatJobStatus;
+  original_filename: string;
+  result: SquatApiResponse | null;
+  error_message: string | null;
+  created_at: string;
+  updated_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+};
+
+export type SquatJobListResponse = {
+  jobs: SquatJobResponse[];
+};
+
 export type RepFrame = {
   rep_number: number;
   frame: number;

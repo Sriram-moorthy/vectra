@@ -1,14 +1,61 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import LoginPage from "./pages/LoginPage";
 import DashboardPage from "./pages/DashboardPage";
+import PlaceholderPage from "./pages/PlaceholderPage";
+import RecentAnalysisPage from "./pages/RecentAnalysisPage";
 import { loginUser } from "./services/authApi";
+import type { AppTab } from "./types/navigation";
+import type { SquatJobResponse } from "./types/squat";
+
+const AUTH_STORAGE_KEY = "vectra.isLoggedIn";
+const ACTIVE_TAB_STORAGE_KEY = "vectra.activeTab";
+
+function getStoredLoginState() {
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  return window.localStorage.getItem(AUTH_STORAGE_KEY) === "true";
+}
+
+function getStoredActiveTab(): AppTab {
+  if (typeof window === "undefined") {
+    return "dashboard";
+  }
+
+  const savedTab = window.localStorage.getItem(ACTIVE_TAB_STORAGE_KEY);
+  const allowedTabs: AppTab[] = [
+    "dashboard",
+    "recent-analysis",
+    "clients",
+    "sessions",
+    "insights",
+    "settings",
+  ];
+
+  if (savedTab && allowedTabs.includes(savedTab as AppTab)) {
+    return savedTab as AppTab;
+  }
+
+  return "dashboard";
+}
 
 export default function App() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [isLoggedIn, setIsLoggedIn] = useState(getStoredLoginState);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [activeTab, setActiveTab] = useState<AppTab>(getStoredActiveTab);
+  const [selectedJob, setSelectedJob] = useState<SquatJobResponse | null>(null);
+
+  useEffect(() => {
+    window.localStorage.setItem(AUTH_STORAGE_KEY, String(isLoggedIn));
+  }, [isLoggedIn]);
+
+  useEffect(() => {
+    window.localStorage.setItem(ACTIVE_TAB_STORAGE_KEY, activeTab);
+  }, [activeTab]);
 
   const handleLogin = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -48,5 +95,30 @@ export default function App() {
     );
   }
 
-  return <DashboardPage />;
+  if (activeTab === "recent-analysis") {
+    return (
+      <RecentAnalysisPage
+        activeTab={activeTab}
+        onTabChange={setActiveTab}
+        selectedJobId={selectedJob?.id ?? null}
+        onOpenAnalysis={(job) => {
+          setSelectedJob(job);
+          setActiveTab("dashboard");
+        }}
+      />
+    );
+  }
+
+  if (activeTab !== "dashboard") {
+    return <PlaceholderPage activeTab={activeTab} onTabChange={setActiveTab} />;
+  }
+
+  return (
+    <DashboardPage
+      activeTab={activeTab}
+      onTabChange={setActiveTab}
+      requestedJob={selectedJob}
+      onJobLoaded={setSelectedJob}
+    />
+  );
 }

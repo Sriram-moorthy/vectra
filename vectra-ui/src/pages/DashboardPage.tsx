@@ -1,17 +1,36 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { analyzeSquatVideo } from "../services/squatApi";
-import type { SquatApiResponse, SquatAnalysis } from "../types/squat";
+import { API_BASE_URL } from "../services/apiConfig";
+import { createSquatJob, fetchSquatJob } from "../services/squatApi";
+import type { AppTab } from "../types/navigation";
+import type {
+  SquatApiResponse,
+  SquatAnalysis,
+  SquatJobResponse,
+} from "../types/squat";
 
-const API_BASE_URL = "http://localhost:8000";
+type DashboardPageProps = {
+  activeTab: AppTab;
+  onTabChange: (tab: AppTab) => void;
+  requestedJob?: SquatJobResponse | null;
+  onJobLoaded?: (job: SquatJobResponse) => void;
+};
 
-export default function DashboardPage() {
+export default function DashboardPage({
+  activeTab,
+  onTabChange,
+  requestedJob,
+  onJobLoaded,
+}: DashboardPageProps) {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [result, setResult] = useState<SquatApiResponse | null>(null);
+  const [job, setJob] = useState<SquatJobResponse | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
   const [selectedRepNumber, setSelectedRepNumber] = useState<number | null>(null);
+  const [handledRequestedJobId, setHandledRequestedJobId] = useState<string | null>(null);
 
   const analysis: SquatAnalysis | null = result?.squat_analysis ?? null;
+  const isPollingJob = job?.status === "queued" || job?.status === "running";
   const supportsRepDetection = analysis?.supported_analysis?.includes("rep_detection") ?? false;
   const supportsDepth = analysis?.supported_analysis?.includes("depth") ?? false;
   const supportsTorsoLean = analysis?.supported_analysis?.includes("torso_lean") ?? false;
@@ -87,6 +106,94 @@ export default function DashboardPage() {
   const highlightedFrontSnapshot =
     supportsKneeTracking ? analysis?.frames?.knee_frame ?? null : null;
 
+  async function handleOpenJob(selectedJob: SquatJobResponse) {
+    try {
+      setError("");
+      setIsLoading(selectedJob.status === "queued" || selectedJob.status === "running");
+      setSelectedRepNumber(null);
+      const freshJob = await fetchSquatJob(selectedJob.id);
+      setJob(freshJob);
+      onJobLoaded?.(freshJob);
+
+      if (freshJob.status === "completed" && freshJob.result) {
+        setResult(freshJob.result);
+        setIsLoading(false);
+      } else if (freshJob.status === "failed") {
+        setResult(null);
+        setError(freshJob.error_message ?? "Squat analysis failed.");
+        setIsLoading(false);
+      } else {
+        setResult(null);
+      }
+    } catch (openJobError) {
+      const message =
+        openJobError instanceof Error ? openJobError.message : "Failed to load selected job.";
+      setError(message);
+      setIsLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!requestedJob?.id) {
+      return;
+    }
+
+    if (handledRequestedJobId === requestedJob.id) {
+      return;
+    }
+
+    setHandledRequestedJobId(requestedJob.id);
+    handleOpenJob(requestedJob);
+  }, [handledRequestedJobId, requestedJob]);
+
+  useEffect(() => {
+    if (!job?.id || !isPollingJob) {
+      return;
+    }
+
+    let isCancelled = false;
+
+    const pollJob = async () => {
+      try {
+        const nextJob = await fetchSquatJob(job.id);
+        if (isCancelled) {
+          return;
+        }
+
+        setJob(nextJob);
+        onJobLoaded?.(nextJob);
+
+        if (nextJob.status === "completed" && nextJob.result) {
+          setResult(nextJob.result);
+          setIsLoading(false);
+          return;
+        }
+
+        if (nextJob.status === "failed") {
+          setError(nextJob.error_message ?? "Squat analysis failed.");
+          setIsLoading(false);
+        }
+      } catch (pollError) {
+        if (isCancelled) {
+          return;
+        }
+
+        const message =
+          pollError instanceof Error ? pollError.message : "Failed to refresh job status.";
+        setError(message);
+        setIsLoading(false);
+      }
+    };
+
+    pollJob();
+    const intervalId = window.setInterval(pollJob, 2000);
+
+    return () => {
+      isCancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [isPollingJob, job?.id]);
+
   useEffect(() => {
     if (!supportsRepDetection) {
       setSelectedRepNumber(null);
@@ -133,14 +240,15 @@ export default function DashboardPage() {
     try {
       setIsLoading(true);
       setError("");
-      const data = await analyzeSquatVideo(selectedFile);
-      setResult(data);
+      setResult(null);
       setSelectedRepNumber(null);
+      const createdJob = await createSquatJob(selectedFile);
+      setJob(createdJob);
+      onJobLoaded?.(createdJob);
     } catch (err) {
       const message =
         err instanceof Error ? err.message : "Failed to analyze squat video.";
       setError(message);
-    } finally {
       setIsLoading(false);
     }
   }
@@ -182,11 +290,42 @@ export default function DashboardPage() {
         </div>
 
         <div style={styles.navSection}>
-          <div style={styles.navItemActive}>Dashboard</div>
-          <div style={styles.navItem}>Clients</div>
-          <div style={styles.navItem}>Sessions</div>
-          <div style={styles.navItem}>Insights</div>
-          <div style={styles.navItem}>Settings</div>
+          <button
+            style={activeTab === "dashboard" ? styles.navItemActive : styles.navItem}
+            onClick={() => onTabChange("dashboard")}
+          >
+            Dashboard
+          </button>
+          <button
+            style={activeTab === "recent-analysis" ? styles.navItemActive : styles.navItem}
+            onClick={() => onTabChange("recent-analysis")}
+          >
+            Recent Analysis
+          </button>
+          <button
+            style={activeTab === "clients" ? styles.navItemActive : styles.navItem}
+            onClick={() => onTabChange("clients")}
+          >
+            Clients
+          </button>
+          <button
+            style={activeTab === "sessions" ? styles.navItemActive : styles.navItem}
+            onClick={() => onTabChange("sessions")}
+          >
+            Sessions
+          </button>
+          <button
+            style={activeTab === "insights" ? styles.navItemActive : styles.navItem}
+            onClick={() => onTabChange("insights")}
+          >
+            Insights
+          </button>
+          <button
+            style={activeTab === "settings" ? styles.navItemActive : styles.navItem}
+            onClick={() => onTabChange("settings")}
+          >
+            Settings
+          </button>
         </div>
       </aside>
 
@@ -207,11 +346,36 @@ export default function DashboardPage() {
 
         {error ? <div style={styles.errorBox}>{error}</div> : null}
 
+        {job ? (
+          <div style={styles.jobStatusCard}>
+            <div style={styles.jobStatusRow}>
+              <div>
+                <div style={styles.jobStatusTitle}>Processing status</div>
+                <div style={styles.jobStatusText}>
+                  {job.original_filename} · Job {job.id.slice(0, 8)}
+                </div>
+              </div>
+              <div style={getJobBadgeStyle(job.status)}>{formatJobStatus(job.status)}</div>
+            </div>
+
+            <div style={styles.jobStatusText}>
+              {job.status === "queued"
+                ? "Video upload completed. Waiting for the worker to pick up this job."
+                : job.status === "running"
+                  ? "Worker is processing frames and running squat analysis."
+                  : job.status === "completed"
+                    ? "Analysis complete. Review the result below."
+                    : job.error_message ?? "This job failed before analysis completed."}
+            </div>
+          </div>
+        ) : null}
+
         {!result ? (
           <div style={styles.emptyState}>
             <div style={styles.emptyTitle}>No analysis loaded yet</div>
             <div style={styles.emptyText}>
               Choose a squat video and click <strong>Analyze video</strong>.
+              {isPollingJob ? " We’ll keep checking job status automatically." : ""}
             </div>
           </div>
         ) : (
@@ -559,6 +723,52 @@ function getCoachStatus(depthStatus?: string) {
   }
 }
 
+function formatJobStatus(status: string) {
+  switch (status) {
+    case "queued":
+      return "Queued";
+    case "running":
+      return "Running";
+    case "completed":
+      return "Completed";
+    case "failed":
+      return "Failed";
+    default:
+      return "Unknown";
+  }
+}
+
+function getJobBadgeStyle(status: string): React.CSSProperties {
+  switch (status) {
+    case "queued":
+      return {
+        ...styles.jobBadge,
+        backgroundColor: "#fff7ed",
+        color: "#c2410c",
+      };
+    case "running":
+      return {
+        ...styles.jobBadge,
+        backgroundColor: "#eff6ff",
+        color: "#1d4ed8",
+      };
+    case "completed":
+      return {
+        ...styles.jobBadge,
+        backgroundColor: "#ecfdf5",
+        color: "#047857",
+      };
+    case "failed":
+      return {
+        ...styles.jobBadge,
+        backgroundColor: "#fef2f2",
+        color: "#b91c1c",
+      };
+    default:
+      return styles.jobBadge;
+  }
+}
+
 const styles: Record<string, React.CSSProperties> = {
   page: {
     minHeight: "100vh",
@@ -640,11 +850,18 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: "12px",
     backgroundColor: "#f1f5f9",
     fontWeight: 600,
+    border: "none",
+    textAlign: "left",
+    cursor: "pointer",
   },
   navItem: {
     padding: "10px 12px",
     borderRadius: "12px",
     color: "#64748b",
+    border: "none",
+    backgroundColor: "transparent",
+    textAlign: "left",
+    cursor: "pointer",
   },
   main: {
     flex: 1,
@@ -696,6 +913,38 @@ const styles: Record<string, React.CSSProperties> = {
     border: "1px solid #fecaca",
     borderRadius: "14px",
     padding: "14px 16px",
+  },
+  jobStatusCard: {
+    marginBottom: "18px",
+    backgroundColor: "#ffffff",
+    border: "1px solid #e2e8f0",
+    borderRadius: "18px",
+    padding: "16px 18px",
+    boxShadow: "0 4px 16px rgba(0,0,0,0.04)",
+  },
+  jobStatusRow: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: "12px",
+    marginBottom: "8px",
+  },
+  jobStatusTitle: {
+    fontSize: "14px",
+    fontWeight: 700,
+    color: "#0f172a",
+  },
+  jobStatusText: {
+    fontSize: "13px",
+    color: "#64748b",
+    lineHeight: 1.5,
+  },
+  jobBadge: {
+    borderRadius: "999px",
+    padding: "6px 10px",
+    fontSize: "12px",
+    fontWeight: 700,
+    whiteSpace: "nowrap",
   },
   emptyState: {
     backgroundColor: "#ffffff",

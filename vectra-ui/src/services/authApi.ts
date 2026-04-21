@@ -1,6 +1,6 @@
 import type { LoginRequest, LoginResponse } from "../types/auth";
+import { API_BASE_URL } from "./apiConfig";
 
-const API_BASE_URL = "http://localhost:8000";
 const LOGIN_ENDPOINT = `${API_BASE_URL}/login`;
 
 export async function loginUser(payload: LoginRequest): Promise<LoginResponse> {
