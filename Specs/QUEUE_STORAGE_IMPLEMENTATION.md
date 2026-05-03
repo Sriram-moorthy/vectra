@@ -4,44 +4,44 @@
 
 ### Current Implementation
 
-We are polling the DB every 2 seconds from worker to check if any jobs is in need of execution but polling DB is a costly and unnecessary.
+The current implementation is queue-driven. The API creates the job record in Postgres and enqueues a message into Azure Queue Storage. The worker container consumes the queue and processes one message at a time.
 
-#### Drawback(s)
+This replaced the earlier DB polling worker approach, which was costly and unnecessary.
 
-- Wasted Compute (almost paying for idle as container/app stays running)
-- Latency (job created just after poll and worker waits for full 2 seconds so reponse time depends on poll interval)
-- DB Bottleneck (unnecessary DB load at scale)
-- Scaling problem using container apps/jobs (when one is processing, the next job has to wait)
+### Advantages
 
-### After Implementation
-
-We are now going to leverage Event Driven with Queue Storage and Queue Trigger for azure function. So, the api would create a job in DB and push message to queue. By this way we are removing polling and the job execution happens when new job is pushed to the queue.
-
-#### Advantages
-
-- Zero idle cost (no job - no function running and no CPU usage, no loop)
-- Lower latency (no wait and trigger immediately)
-- Automatic Scaling (Scales out based on job)
 - No DB polling load
-- Queue is reliable with retry
-- Clean Seperation
-    - Polling Model -> DB = job store + job trigger
-    - Queue Model -> DB = job store, Queue = job trigger
+- Lower latency than a fixed DB polling loop
+- Clear separation of concerns between API, persistence, queue dispatch, and worker execution
+- Retry behavior based on Azure Queue visibility timeout and `dequeue_count`
+- Explicit poison queue handling for terminal failures
 
 
 ## Queue Storage Details
 
-We are using the same Storage Account which was used for Blob Implementation but created a new Queue
+We are using the same Storage Account that was already used for blob storage and created dedicated queues for analysis processing.
 
 Resource Group Name - "rg-vectra"
 Storage Account - "vectrastorage001"
 Queue Name - "analysis-jobs"
+Poison Queue Name - "analysis-jobs-poison"
 Queue URL - "https://vectrastorage001.queue.core.windows.net/analysis-jobs"
 Region - "(Asia) South India"
 Performance - "Standard" (Considering Cost)
 Redundancy - "LRS" (Considering Cost)
-Connection String - "DefaultEndpointsProtocol=https;AccountName=vectrastorage001;AccountKey=Hc2qt6LFb80DtmXCMk1cQCTFJvkeEh/8/PJaq8S5t6oGgty+GfnBhTEPofm85DOsZzXtond/zbEx+AStNXvfrg==;EndpointSuffix=core.windows.net"
 
+Connection string values should be provided through environment variables and not documented inline.
+
+## Worker Flow
+
+1. API creates the job row with status `queued`
+2. API sends a queue message containing `job_id` and `analysis_type`
+3. `queue_worker.py` receives one message with a configured visibility timeout
+4. `JobService` marks the job `running`
+5. `queue_job_processor.py` validates the payload and calls `job_runner.py`
+6. On success, the worker marks the job `completed` and deletes the queue message
+7. On retryable failure, the worker requeues the DB job state and leaves the queue message undeleted
+8. On non-retryable failure or retry exhaustion, the worker moves the payload to `analysis-jobs-poison`, marks the job `failed`, and deletes the original message
 
 ## Technical Consideration
 
@@ -49,11 +49,10 @@ Connection String - "DefaultEndpointsProtocol=https;AccountName=vectrastorage001
 
 - Follow SOLID principles
 - Implement repository pattern for Queue Client
-- Connection String can be stored in a config file for now and has to be moved to keyvault in future.
+- Keep connection strings in environment variables and move them to Key Vault in future.
 - Do not overload app.py file. Maintain single responsibility principle.
-- The worker must be refactored,
-    - No polling to DB
-    - Must be Queue triggered Azure Function (Event Driven)
+- Keep orchestration in `queue_job_processor.py`, analysis execution in `job_runner.py`, and persistence in `job_service.py`
+- Use a dedicated worker entrypoint for Container Apps Job deployment
 - Maintain clean seperation of concern
 
 ### Security and Access

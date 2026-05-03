@@ -11,7 +11,7 @@ from analyzers.squat_analyzer import SquatAnalyzer
 from config.local_settings_loader import load_local_settings
 from services.blob_storage_service import BlobStorageService
 from services.job_runner import JobRunner
-from services.job_store import JobStore
+from services.job_service import JobService
 from services.login_service import LoginService
 from services.queue_service import QueueService
 from shared.frame_extractor import FrameExtractor
@@ -34,7 +34,7 @@ pose_analyzer = PoseAnalyzer()
 squat_analyzer = SquatAnalyzer()
 login_service = LoginService()
 job_runner = JobRunner()
-job_store = JobStore()
+job_service = JobService()
 blob_storage_service = BlobStorageService()
 queue_service = QueueService()
 
@@ -125,7 +125,7 @@ async def create_squat_job(file: UploadFile = File(...)):
         content_type=file.content_type,
     )
 
-    job = job_store.create_job(
+    job = job_service.create_job(
         job_id=job_id,
         analysis_type="squat",
         original_filename=original_filename,
@@ -139,7 +139,7 @@ async def create_squat_job(file: UploadFile = File(...)):
 
 @app.get("/jobs/{job_id}", response_model=JobSummaryResponse)
 async def get_job(job_id: str):
-    job = job_store.get_job(job_id)
+    job = job_service.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found.")
 
@@ -148,7 +148,7 @@ async def get_job(job_id: str):
 
 @app.get("/jobs", response_model=JobListResponse)
 async def list_jobs(limit: int = 20):
-    jobs = job_store.list_jobs(limit=limit)
+    jobs = job_service.list_jobs(limit=limit)
     return JobListResponse(jobs=[build_job_response(job) for job in jobs])
 
 

@@ -10,7 +10,7 @@ def utc_now() -> datetime:
     return datetime.now(UTC)
 
 
-class JobStore:
+class JobService:
     def __init__(self, repository=None):
         self.repository = repository or PostgresJobRepository(get_postgres_config())
         self.repository.initialize()
@@ -67,6 +67,14 @@ class JobStore:
             status="completed",
             updated_at=now,
             completed_at=now,
+        )
+        return self._row_to_job(row) if row else None
+
+    def requeue_job_for_retry(self, job_id: str, error_message: str) -> dict[str, Any] | None:
+        row = self.repository.mark_job_queued_for_retry(
+            job_id,
+            error_message=error_message,
+            updated_at=utc_now(),
         )
         return self._row_to_job(row) if row else None
 

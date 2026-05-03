@@ -20,4 +20,4 @@ RUN pip install --no-cache-dir --upgrade pip \
 
 COPY . .
 
-CMD ["python", "queue_worker_job.py"]
+CMD ["python", "queue_worker.py"]

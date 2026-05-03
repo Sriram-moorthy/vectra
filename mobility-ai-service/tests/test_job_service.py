@@ -2,8 +2,8 @@ from datetime import UTC, datetime
 import unittest
 from unittest.mock import Mock, patch
 
-from services.queue_job_processor import process_queue_message
-from services.job_store import JobStore
+from services.queue_job_processor import RetryableQueueProcessingError, process_queue_message
+from services.job_service import JobService
 
 
 class InMemoryJobRepository:
@@ -60,10 +60,29 @@ class InMemoryJobRepository:
         job["completed_at"] = completed_at
         return dict(job)
 
+    def mark_job_queued_for_retry(
+        self,
+        job_id: str,
+        *,
+        error_message: str,
+        updated_at: datetime,
+    ) -> dict | None:
+        job = self.jobs.get(job_id)
+        if job is None or job["status"] != "running":
+            return None
 
-class JobStoreTests(unittest.TestCase):
-    def build_store(self) -> JobStore:
-        return JobStore(repository=InMemoryJobRepository())
+        job["status"] = "queued"
+        job["result_json"] = None
+        job["error_message"] = error_message
+        job["updated_at"] = updated_at
+        job["started_at"] = None
+        job["completed_at"] = None
+        return dict(job)
+
+
+class JobServiceTests(unittest.TestCase):
+    def build_store(self) -> JobService:
+        return JobService(repository=InMemoryJobRepository())
 
     def test_job_lifecycle_moves_from_queued_to_completed(self):
         store = self.build_store()
@@ -115,7 +134,7 @@ class JobStoreTests(unittest.TestCase):
         self.assertEqual(updated_job["status"], "completed")
         self.assertEqual(updated_job["result"]["filename"], "demo.mp4")
 
-    def test_worker_marks_job_failed_when_runner_raises(self):
+    def test_worker_raises_retryable_error_when_runner_fails(self):
         store = self.build_store()
         store.create_job(
             job_id="job-3",
@@ -125,16 +144,34 @@ class JobStoreTests(unittest.TestCase):
             video_blob_name="job-3/job-3_demo.mp4",
         )
 
-        processed = process_queue_message(
-            store,
-            Mock(run_squat_job=Mock(side_effect=RuntimeError("processing failed"))),
-            {"job_id": "job-3", "analysis_type": "squat"},
-        )
+        with self.assertRaises(RetryableQueueProcessingError):
+            process_queue_message(
+                store,
+                Mock(run_squat_job=Mock(side_effect=RuntimeError("processing failed"))),
+                {"job_id": "job-3", "analysis_type": "squat"},
+            )
 
-        failed_job = store.get_job("job-3")
-        self.assertFalse(processed)
-        self.assertEqual(failed_job["status"], "failed")
-        self.assertEqual(failed_job["error_message"], "processing failed")
+        job = store.get_job("job-3")
+        self.assertEqual(job["status"], "running")
+        self.assertIsNone(job["error_message"])
+
+    def test_requeue_job_for_retry_moves_running_job_back_to_queued(self):
+        store = self.build_store()
+        store.create_job(
+            job_id="job-retry",
+            analysis_type="squat",
+            original_filename="demo.mp4",
+            stored_filename="job-retry_demo.mp4",
+            video_blob_name="job-retry/job-retry_demo.mp4",
+        )
+        store.mark_job_running("job-retry")
+
+        queued_job = store.requeue_job_for_retry("job-retry", "temporary failure")
+
+        self.assertEqual(queued_job["status"], "queued")
+        self.assertEqual(queued_job["error_message"], "temporary failure")
+        self.assertIsNone(queued_job["started_at"])
+        self.assertIsNone(queued_job["completed_at"])
 
     def test_list_jobs_returns_most_recent_first(self):
         store = self.build_store()
@@ -143,7 +180,7 @@ class JobStoreTests(unittest.TestCase):
         older_time = datetime(2026, 4, 23, 9, 0, tzinfo=UTC)
         newer_time = datetime(2026, 4, 23, 10, 0, tzinfo=UTC)
 
-        with patch("services.job_store.utc_now", side_effect=[older_time, newer_time]):
+        with patch("services.job_service.utc_now", side_effect=[older_time, newer_time]):
             store.create_job(
                 job_id="job-older",
                 analysis_type="squat",

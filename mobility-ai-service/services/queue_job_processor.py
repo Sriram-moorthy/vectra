@@ -1,24 +1,34 @@
 from services.job_runner import JobRunner
-from services.job_store import JobStore
+from services.job_service import JobService
 import logging
 
 
-def process_queue_message(job_store: JobStore, job_runner: JobRunner, message: dict) -> bool:
+class NonRetryableQueueMessageError(Exception):
+    pass
+
+
+class RetryableQueueProcessingError(Exception):
+    pass
+
+
+def process_queue_message(job_service: JobService, job_runner: JobRunner, message: dict) -> bool:
     logging.info("process queue message ENTER")
     job_id = message.get("job_id")
     analysis_type = message.get("analysis_type")
 
     if not job_id:
-        raise ValueError("Queue message is missing job_id.")
+        raise NonRetryableQueueMessageError("Queue message is missing job_id.")
 
     if analysis_type != "squat":
-        raise ValueError(f"Unsupported analysis type: {analysis_type}")
-    
+        raise NonRetryableQueueMessageError(f"Unsupported analysis type: {analysis_type}")
+
     logging.info("mark runing, Start")
-    job = job_store.mark_job_running(job_id)
+    job = job_service.mark_job_running(job_id)
     logging.info("runnin...")
     if job is None:
-        existing_job = job_store.get_job(job_id)
+        existing_job = job_service.get_job(job_id)
+        if existing_job is None:
+            raise NonRetryableQueueMessageError(f"Job not found for job_id={job_id}")
         return existing_job is not None and existing_job["status"] in {
             "running",
             "completed",
@@ -32,9 +42,8 @@ def process_queue_message(job_store: JobStore, job_runner: JobRunner, message: d
             stored_filename=job["stored_filename"],
             job_id=job_id,
         )
-        job_store.mark_job_completed(job_id, result)
+        job_service.mark_job_completed(job_id, result)
     except Exception as exc:
-        job_store.mark_job_failed(job_id, str(exc))
-        return False
+        raise RetryableQueueProcessingError(str(exc)) from exc
 
     return True

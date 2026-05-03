@@ -6,6 +6,9 @@ from dataclasses import dataclass
 class QueueStorageConfig:
     connection_string: str
     queue_name: str
+    poison_queue_name: str
+    visibility_timeout_seconds: int
+    max_dequeue_count: int
 
 
 def get_queue_storage_config() -> QueueStorageConfig:
@@ -22,4 +25,10 @@ def get_queue_storage_config() -> QueueStorageConfig:
     return QueueStorageConfig(
         connection_string=connection_string,
         queue_name=os.environ.get("ANALYSIS_JOBS_QUEUE_NAME", "analysis-jobs"),
+        poison_queue_name=os.environ.get(
+            "ANALYSIS_JOBS_POISON_QUEUE_NAME",
+            "analysis-jobs-poison",
+        ),
+        visibility_timeout_seconds=int(os.environ.get("ANALYSIS_JOB_VISIBILITY_TIMEOUT", "1800")),
+        max_dequeue_count=int(os.environ.get("ANALYSIS_JOB_MAX_DEQUEUE_COUNT", "3")),
     )

@@ -1,6 +1,6 @@
 # Vectra
 
-Vectra is a squat video analysis system for coaches and trainers. It combines a React + Vite frontend with a FastAPI backend, MediaPipe-based pose analysis, blob-backed media storage, Postgres-backed job persistence, and queue-driven async processing.
+Vectra is a squat video analysis system for coaches and trainers. It combines a React + Vite frontend with a FastAPI backend, MediaPipe-based pose analysis, Azure Blob Storage for media, Azure Database for PostgreSQL for job persistence, and Azure Queue Storage with a Container Apps worker for async processing.
 
 The current product scope is focused on squat analysis.
 
@@ -13,7 +13,7 @@ The current product scope is focused on squat analysis.
 - Generates annotated analysis frames and serves them through the backend
 - Stores media in Azure Blob Storage
 - Persists jobs in Azure Database for PostgreSQL
-- Dispatches async analysis jobs through Azure Queue Storage and an Azure Function entrypoint
+- Dispatches async analysis jobs through Azure Queue Storage and a queue worker
 - Includes a simple demo login flow using `admin / admin`
 
 ## Architecture
@@ -36,7 +36,8 @@ The current product scope is focused on squat analysis.
 - Azure Blob Storage for uploaded videos, extracted frames, and annotated frames
 - Azure Database for PostgreSQL Flexible Server for job persistence
 - Azure Queue Storage for job dispatch
-- Azure Functions queue trigger scaffold for event-driven analysis processing
+- Azure Container Apps Job for queue-driven background processing
+- Poison queue handling through `analysis-jobs-poison` for terminal failures
 
 ## Repository Structure
 
@@ -50,8 +51,8 @@ MobilityDetectionSystem/
 │   ├── shared/
 │   ├── tests/
 │   ├── app.py
-│   ├── function_app.py
-│   ├── host.json
+│   ├── queue_worker.py
+│   ├── Dockerfile.worker
 │   └── local.settings.json
 ├── vectra-ui/
 │   ├── src/
@@ -60,7 +61,7 @@ MobilityDetectionSystem/
 │   ├── BLOB_STORAGE_IMPLEMENTATION.md
 │   ├── POSTGRES_IMPLEMENTATION.md
 │   ├── QUEUE_STORAGE_IMPLEMENTATION.md
-│   └── ...
+│   └── WORKER_ARCHITECTURE.md
 └── README.md
 ```
 
@@ -69,47 +70,32 @@ MobilityDetectionSystem/
 1. A user signs in from the frontend.
 2. The frontend uploads a squat video to the backend.
 3. The backend stores the uploaded video in Azure Blob Storage.
-4. The backend creates a job record in Postgres.
-5. The backend pushes a queue message to Azure Queue Storage.
-6. A queue-triggered worker/function processes the job.
+4. The backend creates a job record in Postgres with status `queued`.
+5. The backend pushes a message to Azure Queue Storage.
+6. The queue worker pulls one message, claims the job in Postgres, and runs the squat pipeline.
 7. Frames are extracted and uploaded to Blob Storage.
 8. Pose landmarks are analyzed and squat rules are applied.
 9. Annotated output frames are uploaded to Blob Storage.
 10. The frontend polls the backend for job status and renders the completed result.
 
-## Analysis Behavior
+## Worker Behavior
 
-### Side View
+- `app.py` creates jobs and enqueues queue messages.
+- `services/job_service.py` manages job state over the Postgres repository.
+- `services/queue_job_processor.py` validates queue payloads, claims jobs, and orchestrates analysis execution.
+- `services/job_runner.py` performs the actual squat video processing work.
+- `queue_worker.py` is the entrypoint used by local runs and the worker container image.
 
-- Rep count
-- Bottom frame selection per rep
-- Depth status:
-  - below parallel
-  - at parallel
-  - above parallel
-- Torso lean status:
-  - upright
-  - moderate lean
-  - excessive lean
+Retry and poison queue behavior:
 
-### Front View
-
-- Knee tracking status:
-  - tracking well
-  - mild knee cave
-  - moderate knee cave
-  - severe knee cave
-
-### Output Frames
-
-- Annotated rep frames for side-view analysis
-- An annotated representative frame for front-view knee tracking
+- The worker receives messages with a visibility timeout controlled by `ANALYSIS_JOB_VISIBILITY_TIMEOUT`.
+- Retryable failures are left on the main queue and retried based on Azure Queue `dequeue_count`.
+- Non-retryable failures go straight to `analysis-jobs-poison`.
+- When `dequeue_count` reaches `ANALYSIS_JOB_MAX_DEQUEUE_COUNT`, the message is moved to the poison queue and the job is marked `failed`.
 
 ## Configuration
 
-The backend now reads infra settings from environment variables. For local Azure Functions runs, these are supplied through `mobility-ai-service/local.settings.json`. For Azure deployment, the same values should be configured as Function App Application Settings.
-
-For local development, `mobility-ai-service/local.settings.json` is now auto-loaded by the FastAPI app, the queue worker, and the Azure Function entrypoint when those values are not already present in the environment.
+The backend reads infra settings from environment variables. For local development, `mobility-ai-service/local.settings.json` is auto-loaded by the FastAPI app and the queue worker when those values are not already present in the environment.
 
 ### Required Environment Variables
 
@@ -119,6 +105,9 @@ For local development, `mobility-ai-service/local.settings.json` is now auto-loa
 - `BLOB_FRAMES_CONTAINER`
 - `BLOB_ANNOTATED_FRAMES_CONTAINER`
 - `ANALYSIS_JOBS_QUEUE_NAME`
+- `ANALYSIS_JOBS_POISON_QUEUE_NAME`
+- `ANALYSIS_JOB_VISIBILITY_TIMEOUT`
+- `ANALYSIS_JOB_MAX_DEQUEUE_COUNT`
 - `POSTGRES_HOST`
 - `POSTGRES_PORT`
 - `POSTGRES_DB`
@@ -133,7 +122,6 @@ For local development, `mobility-ai-service/local.settings.json` is now auto-loa
 - Python 3.11 recommended
 - Node.js 18+
 - npm
-- Azure Functions Core Tools if you want to run the queue-triggered function locally
 
 ### 1. Backend Setup
 
@@ -164,26 +152,23 @@ Backend URL:
 http://localhost:8000
 ```
 
-### 3. Start the Queue-Triggered Function
+### 3. Start the Queue Worker
 
 From [`mobility-ai-service`](/Users/padmakumar0930/Vectra/MobilityDetectionSystem/mobility-ai-service):
 
+Run once:
+
 ```bash
 source venv/bin/activate
-func start
+python3 queue_worker.py
 ```
 
-This uses:
+Run in a simple local loop:
 
-- `function_app.py` as the Azure Function entrypoint
-- `host.json` for the function host
-- `local.settings.json` for local-only environment variables
-
-The same `local.settings.json` file is also used automatically when running `uvicorn app:app --reload` or `python worker.py` locally.
-
-Important note:
-
-- `host.json` configures Azure Queue processing with `"messageEncoding": "none"` because the backend currently enqueues plain JSON text messages rather than Base64-encoded payloads.
+```bash
+source venv/bin/activate
+while true; do python3 queue_worker.py || true; sleep 5; done
+```
 
 ### 4. Start the Frontend
 
@@ -228,7 +213,7 @@ Authentication is still demo-only and does not yet use a real user store.
 
 ```bash
 cd mobility-ai-service
-./venv/bin/python -m unittest tests.test_side_view_squat_logic tests.test_login_service tests.test_job_store
+./venv/bin/python -m unittest tests.test_side_view_squat_logic tests.test_login_service tests.test_job_service
 ```
 
 ### Frontend
@@ -241,15 +226,13 @@ npm run build
 ## Deployment Notes
 
 - `local.settings.json` is for local development only.
-- After Azure deployment, configure the same keys as Azure Function App Application Settings.
+- For Azure deployment, configure the same keys as Container Apps and backend environment variables.
+- `Dockerfile.worker` builds the worker image that starts `queue_worker.py`.
 - Do not rely on checked-in local secrets for production.
-- The current Azure Function scaffold is queue-triggered and reuses the same job-processing path as the local worker entrypoint.
-- Keep the `host.json` queue extension setting aligned with the current producer format:
-  - `"extensions": { "queues": { "messageEncoding": "none" } }`
 
 ## Notes
 
 - The current implementation is focused on squat analysis only.
 - Authentication is still demo-only.
 - Frame annotation is handled in the backend so it can be reused for future lifts or assessments.
-- The system now uses event-driven async processing instead of DB polling.
+- Async processing is queue-driven and no longer relies on DB polling or Azure Functions.

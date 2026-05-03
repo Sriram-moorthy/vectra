@@ -132,6 +132,33 @@ class PostgresJobRepository:
             connection.commit()
         return row
 
+    def mark_job_queued_for_retry(
+        self,
+        job_id: str,
+        *,
+        error_message: str,
+        updated_at: datetime,
+    ) -> dict | None:
+        with self._connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    UPDATE jobs
+                    SET status = 'queued',
+                        result_json = NULL,
+                        error_message = %s,
+                        updated_at = %s,
+                        started_at = NULL,
+                        completed_at = NULL
+                    WHERE id = %s AND status = 'running'
+                    RETURNING *
+                    """,
+                    (error_message, updated_at, job_id),
+                )
+                row = cursor.fetchone()
+            connection.commit()
+        return row
+
     def update_job_completion(
         self,
         job_id: str,

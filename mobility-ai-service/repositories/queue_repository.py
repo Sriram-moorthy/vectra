@@ -12,6 +12,7 @@ class QueueMessage:
     id: str
     pop_receipt: str
     content: str
+    dequeue_count: int
 
 
 class AzureQueueRepository:
@@ -49,6 +50,7 @@ class AzureQueueRepository:
             id=message.id,
             pop_receipt=message.pop_receipt,
             content=message.content,
+            dequeue_count=message.dequeue_count,
         )
 
     def delete_message(self, message: QueueMessage):

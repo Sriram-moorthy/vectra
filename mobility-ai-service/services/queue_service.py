@@ -3,14 +3,23 @@ from repositories.queue_repository import AzureQueueRepository, QueueMessage
 
 
 class QueueService:
-    def __init__(self, repository=None):
+    def __init__(self, repository=None, poison_repository=None):
         config = get_queue_storage_config()
+        self.config = config
         self.repository = repository or AzureQueueRepository(
             connection_string=config.connection_string,
             queue_name=config.queue_name,
         )
+        self.poison_repository = poison_repository or AzureQueueRepository(
+            connection_string=config.connection_string,
+            queue_name=config.poison_queue_name,
+        )
         try:
             self.repository.initialize()
+        except Exception:
+            pass
+        try:
+            self.poison_repository.initialize()
         except Exception:
             pass
 
@@ -27,3 +36,6 @@ class QueueService:
 
     def delete_analysis_job(self, message: QueueMessage):
         self.repository.delete_message(message)
+
+    def enqueue_poison_job(self, payload: dict):
+        self.poison_repository.send_message(payload)
