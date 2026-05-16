@@ -28,7 +28,7 @@ export default function RecentAnalysisPage({
       setIsLoading(true);
       setError("");
       const response = await listSquatJobs(24);
-      setJobs(response.jobs);
+      setJobs(response.analyses);
     } catch (loadError) {
       const message =
         loadError instanceof Error ? loadError.message : "Failed to load recent analyses.";

@@ -1,12 +1,14 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { API_BASE_URL } from "../services/apiConfig";
-import { createSquatJob, fetchSquatJob } from "../services/squatApi";
+import { createSquatJob, fetchSquatJob, saveAnalysisFeedback } from "../services/squatApi";
 import type { AppTab } from "../types/navigation";
 import type {
   SquatApiResponse,
   SquatAnalysis,
   SquatJobResponse,
 } from "../types/squat";
+import type { Client } from "../types/client";
+import type { CoachProfile } from "../types/auth";
 
 type DashboardPageProps = {
   activeTab: AppTab;
@@ -14,6 +16,9 @@ type DashboardPageProps = {
   onLogout: () => void;
   requestedJob?: SquatJobResponse | null;
   onJobLoaded?: (job: SquatJobResponse) => void;
+  selectedClient?: Client | null;
+  selectedClientId?: number | null;
+  coach?: CoachProfile | null;
 };
 
 export default function DashboardPage({
@@ -22,12 +27,17 @@ export default function DashboardPage({
   onLogout,
   requestedJob,
   onJobLoaded,
+  selectedClient,
+  selectedClientId,
+  coach,
 }: DashboardPageProps) {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [result, setResult] = useState<SquatApiResponse | null>(null);
   const [job, setJob] = useState<SquatJobResponse | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
+  const [feedbackNote, setFeedbackNote] = useState("");
+  const [isSavingFeedback, setIsSavingFeedback] = useState(false);
   const [selectedRepNumber, setSelectedRepNumber] = useState<number | null>(null);
   const [handledRequestedJobId, setHandledRequestedJobId] = useState<string | null>(null);
 
@@ -119,6 +129,7 @@ export default function DashboardPage({
 
       if (freshJob.status === "completed" && freshJob.result) {
         setResult(freshJob.result);
+        setFeedbackNote(freshJob.coach_feedback_note ?? "");
         setIsLoading(false);
       } else if (freshJob.status === "failed") {
         setResult(null);
@@ -167,6 +178,7 @@ export default function DashboardPage({
 
         if (nextJob.status === "completed" && nextJob.result) {
           setResult(nextJob.result);
+          setFeedbackNote(nextJob.coach_feedback_note ?? "");
           setIsLoading(false);
           return;
         }
@@ -238,13 +250,17 @@ export default function DashboardPage({
       setError("Please choose a video file first.");
       return;
     }
+    if (!selectedClientId) {
+      setError("Select a client from the Clients tab before uploading a video.");
+      return;
+    }
 
     try {
       setIsLoading(true);
       setError("");
       setResult(null);
       setSelectedRepNumber(null);
-      const createdJob = await createSquatJob(selectedFile);
+      const createdJob = await createSquatJob(selectedFile, selectedClientId);
       setJob(createdJob);
       onJobLoaded?.(createdJob);
     } catch (err) {
@@ -252,6 +268,24 @@ export default function DashboardPage({
         err instanceof Error ? err.message : "Failed to analyze squat video.";
       setError(message);
       setIsLoading(false);
+    }
+  }
+
+  async function handleSaveFeedback() {
+    if (!job?.id) {
+      setError("No analysis selected yet.");
+      return;
+    }
+
+    try {
+      setIsSavingFeedback(true);
+      const updatedJob = await saveAnalysisFeedback(job.id, feedbackNote);
+      setJob(updatedJob);
+      onJobLoaded?.(updatedJob);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save coach feedback.");
+    } finally {
+      setIsSavingFeedback(false);
     }
   }
 
@@ -269,7 +303,9 @@ export default function DashboardPage({
         <div style={styles.uploadCard}>
           <div style={styles.uploadTitle}>New review</div>
           <div style={styles.uploadText}>
-            Upload athlete squat video and get instant analysis.
+            {selectedClient
+              ? `Upload a squat video for ${selectedClient.first_name} ${selectedClient.last_name}.`
+              : "Pick a client first, then upload a squat video for analysis."}
           </div>
 
           <input
@@ -285,7 +321,7 @@ export default function DashboardPage({
           <button
             style={styles.primaryLightButton}
             onClick={handleAnalyze}
-            disabled={isLoading}
+            disabled={isLoading || !selectedClientId}
           >
             {isLoading ? "Analyzing..." : "Analyze video"}
           </button>
@@ -336,7 +372,12 @@ export default function DashboardPage({
           <div>
             <h1 style={styles.pageTitle}>Squat review</h1>
             <p style={styles.pageSubtitle}>
-              Fast coach workflow: upload, inspect key rep, send cues.
+              {coach
+                ? `Welcome ${coach.first_name}. Review technique, save coach notes, and keep analysis client-linked.`
+                : "Fast coach workflow: upload, inspect key rep, send cues."}
+            </p>
+            <p style={styles.pageSubtitle}>
+              Active client: {selectedClient ? `${selectedClient.first_name} ${selectedClient.last_name}` : "None selected"}
             </p>
           </div>
 
@@ -632,11 +673,14 @@ export default function DashboardPage({
 
                 <textarea
                   style={styles.textarea}
-                  defaultValue={analysis?.feedback?.summary?.message ?? ""}
+                  value={feedbackNote}
+                  onChange={(e) => setFeedbackNote(e.target.value)}
                 />
 
                 <div style={styles.sendButtons}>
-                  <button style={styles.secondaryButton}>Save draft</button>
+                  <button style={styles.secondaryButton} onClick={handleSaveFeedback} disabled={isSavingFeedback}>
+                    {isSavingFeedback ? "Saving..." : "Save feedback"}
+                  </button>
                   <button style={styles.primaryButton}>Copy feedback</button>
                 </div>
               </div>
