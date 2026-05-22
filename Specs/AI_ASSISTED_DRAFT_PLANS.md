@@ -56,7 +56,9 @@ Add the same secondary CTA:
 AI Draft
 ```
 
-Workout drafts should factor in latest form-analysis findings more heavily, especially corrective cues and movement issues.
+Workout drafts should factor in latest form-analysis findings more heavily, especially corrective cues, movement issues, mobility limitations, and recommended corrective work.
+
+Workout drafts must include stretches and mobility drills, with clear timing for when the client should perform them during each workout session.
 
 ## Backend Plan
 
@@ -234,9 +236,28 @@ For workout:
 - `summary`
 - `focus`
 - `workout_days`
+- `mobility_drills`
+- `stretching_plan`
 - `notes`
 
 This avoids a PDF and UI redesign for v1.
+
+Workout draft content should describe:
+
+- workout structure by day
+- warm-up sequence
+- mobility drills before main lifts or movement blocks
+- corrective drills tied to form-analysis findings
+- cool-down stretches after training
+- rest-day or low-intensity mobility recommendations when useful
+
+Mobility and stretching guidance should clearly state timing, for example:
+
+- before workout
+- between warm-up and main sets
+- between sets, only when appropriate
+- after workout
+- on recovery/rest days
 
 ## Nutrition Generation Preferences
 
@@ -300,6 +321,15 @@ Workout draft drawer inputs:
 - end date
 - optional coach instructions
 
+Workout AI generation rules:
+
+- Include stretches and mobility drills in every generated workout draft.
+- Use latest completed form-analysis results when available.
+- Prefer mobility drills that address detected movement limitations, corrective recommendations, and coach feedback notes.
+- Clearly state when each mobility drill or stretch should be performed within the workout session.
+- Keep mobility work practical and coach-reviewable, not clinical or medical.
+- If no form analysis exists, include general mobility work appropriate to the client's profile and goal.
+
 AI draft CTA requirements:
 
 - Use `lucide-react` `WandSparkles` or `Sparkles` icon.
@@ -332,6 +362,7 @@ Backend:
 - create draft for nutrition
 - create nutrition draft with dietary preference
 - create draft for workout
+- create workout draft with mobility drills and stretch timing
 - reject draft creation for clients not owned by coach
 - approve draft creates final plan
 - discarded draft cannot be approved
@@ -347,6 +378,7 @@ Frontend:
 - approve creates final plan and refreshes history
 - discard removes active draft
 - existing manual create/export flows still work
+- workout drafts render mobility and stretching content clearly before approval
 
 ## Recommended Implementation Slices
 
